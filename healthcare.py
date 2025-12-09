@@ -18,12 +18,12 @@ RULES TO STRICTLY FOLLOW:
 """
 
 MODEL_NAME = 'gemini-2.5-flash'
-APP_TITLE = "🩺 Contextual Health Companion (Text Reader)"
+APP_TITLE = "🩺 Health Companion (Dr.Drug Lord)"
 
 # --- CONFIGURATION CONSTANTS ---
 TRIGGER_KEYWORDS = ["symptom", "constipation", "pain", "fever", "headache", "cold"]
-AGE_RANGES = ["0-12", "13-17", "18-45", "46-65", "65+"]
-GENDER_OPTIONS = ["Male", "Female", "Prefer Not to Say"]
+AGE_RANGES = ["0-12", "13-17", "18-30", "31-45, "46-65", "65+"]
+GENDER_OPTIONS = ["Male", "Female", "others"]
 
 # Language Mapping (For Text Output)
 LANGUAGE_MAP = {
@@ -80,7 +80,7 @@ def reset_chat():
     st.session_state['gemini_chat'] = client.chats.create(model=MODEL_NAME, config=config)
     
     st.session_state.messages = [{"role": "assistant", "content": 
-        "**Welcome!** I am your Healthcare Companion. I can provide health information in English, Kannada, Hindi, or Telugu."}]
+        "**Welcome!** I am your Dr.Drug Lord ⛑️. I can provide health information."}]
     st.session_state.asking_for_details = False 
     st.session_state.user_details = {} 
     st.session_state.show_prescription_form = False
@@ -186,7 +186,7 @@ with st.sidebar:
     st.markdown("---")
     
     # 2. MEDICINE INFO BUTTON
-    if st.button("💊 Get Medicine Info"):
+    if st.button("💊💉 Get Medicine Info"):
         st.session_state.show_prescription_form = not st.session_state.show_prescription_form
 
     st.markdown("---")
@@ -221,7 +221,7 @@ for message in st.session_state.messages:
 # 1. MEDICINE INFORMATION FORM
 if st.session_state.show_prescription_form:
     with st.form("medicine_info_form"):
-        st.subheader(f"💊 Medicine Information ({st.session_state.current_language})")
+        st.subheader(f"💊💉 Medicine Information ({st.session_state.current_language})")
         st.info("Enter the medicine name below to understand its usage and associated symptoms.")
         
         medicine_name = st.text_input("Enter Medicine Name (e.g., Dolo 650):")
@@ -285,3 +285,4 @@ if not st.session_state.asking_for_details and not st.session_state.show_prescri
             # Standard Question flow
             handle_final_response(user_input)
             st.rerun()
+
