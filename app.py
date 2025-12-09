@@ -1,247 +1,287 @@
 import streamlit as st
 from google import genai
-# Configure Gemini client (API key stored in Streamlit secrets)
-GEMINI_API_KEY = st.secrets.get("AIzaSyDVl40ikBBx9ZWJJmvRXGiVYyzsUOBjp90")
+from google.genai import types
+from streamlit_mic_recorder import speech_to_text
 
-gemini_client = None
-if GEMINI_API_KEY:
-    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+# --- 1. CONFIGURATION AND SAFETY ---
 
-# -------------------------
-# Simple rule-based knowledge
-# -------------------------
+SYSTEM_INSTRUCTION = """
+You are a helpful, friendly, and **strictly non-diagnostic** Healthcare Companion AI.
+Your purpose is to provide general, educational, and organizational health information.
 
-SYMPTOM_RULES = {
-    "fever": {
-        "keywords": ["fever", "temperature", "high temperature", "hot body"],
-        "issue": "Possible Fever / Infection",
-        "risk": "Medium",
-        "advice": [
-            "Drink plenty of clean water and ORS if feeling weak.",
-            "Take rest and avoid heavy work.",
-            "You may take paracetamol as per dosage on the strip (if not allergic)."
-        ],
-        "doctor_when": [
-            "Fever continues for more than 3 days.",
-            "Very high fever with confusion or fits.",
-            "Difficulty in breathing or chest pain with fever."
-        ]
-    },
-    "diarrhea": {
-        "keywords": ["loose motion", "diarrhea", "watery stool", "loose stools"],
-        "issue": "Possible Diarrhea",
-        "risk": "Medium",
-        "advice": [
-            "Drink ORS frequently to prevent dehydration.",
-            "Avoid street food, oily food and milk products.",
-            "Eat light food like rice, banana and curd."
-        ],
-        "doctor_when": [
-            "Blood in stool.",
-            "No urine for more than 6 hours.",
-            "Very weak, dizzy or fainting."
-        ]
-    },
-    "cough_cold": {
-        "keywords": ["cough", "cold", "running nose", "runny nose", "sneezing"],
-        "issue": "Common Cold / Cough",
-        "risk": "Low to Medium",
-        "advice": [
-            "Drink warm water and avoid chilled drinks.",
-            "Steam inhalation can reduce nose block and cough.",
-            "Avoid dust and smoking area."
-        ],
-        "doctor_when": [
-            "Cough for more than 2 weeks.",
-            "Cough with blood.",
-            "Severe breathing difficulty or chest pain."
-        ]
-    },
-    "headache": {
-        "keywords": ["headache", "head pain", "head is paining"],
-        "issue": "Headache",
-        "risk": "Low to Medium",
-        "advice": [
-            "Take rest in a quiet, dark room.",
-            "Drink water; dehydration can cause headache.",
-            "Avoid looking at mobile / screen for long time."
-        ],
-        "doctor_when": [
-            "Very severe sudden headache.",
-            "Headache with vomiting, weakness, or confusion.",
-            "Headache after head injury."
-        ]
-    },
-    "stomach_pain": {
-        "keywords": ["stomach pain", "abdominal pain", "tummy pain", "belly pain"],
-        "issue": "Stomach Pain",
-        "risk": "Depends on cause",
-        "advice": [
-            "Avoid spicy, oily and street food.",
-            "Drink clean water; avoid drinking unboiled water.",
-            "Eat small, light meals."
-        ],
-        "doctor_when": [
-            "Severe pain that does not improve.",
-            "Pain with vomiting, blood in stool or black stool.",
-            "Pain with high fever or unable to stand straight."
-        ]
-    }
-}
-
-
-def analyze_symptoms(text: str):
-    """
-    Very simple keyword-based matching.
-    Returns list of matched conditions and overall risk.
-    """
-    text_lower = text.lower()
-    matched = []
-
-    risk_order = {"Low": 1, "Low to Medium": 2, "Medium": 3, "High": 4}
-
-    overall_risk_value = 0
-
-    for key, info in SYMPTOM_RULES.items():
-        for kw in info["keywords"]:
-            if kw in text_lower:
-                matched.append(info)
-                risk_val = risk_order.get(info["risk"], 1)
-                overall_risk_value = max(overall_risk_value, risk_val)
-                break  # avoid duplicate match for same condition
-
-    inv_risk_order = {1: "Low", 2: "Low to Medium", 3: "Medium", 4: "High"}
-    overall_risk = inv_risk_order.get(overall_risk_value, "Unknown")
-
-    return matched, overall_risk
-
-
-def build_structured_summary(user_text, matched_conditions, overall_risk):
-    lines = []
-    lines.append(f"User description: {user_text}")
-    lines.append(f"Overall concern level: {overall_risk}")
-    for cond in matched_conditions:
-        lines.append(f"- Possible issue: {cond['issue']} (risk: {cond['risk']})")
-        lines.append("  Self-care steps:")
-        for a in cond["advice"]:
-            lines.append(f"    * {a}")
-        lines.append("  See a doctor if:")
-        for w in cond["doctor_when"]:
-            lines.append(f"    * {w}")
-    return "\n".join(lines)
-
-
-def gemini_explanation(user_text, matched_conditions, overall_risk):
-    """
-    Use Gemini to explain the situation in simple, friendly language.
-    We keep it SAFE: no diagnosis, no prescriptions.
-    """
-    if gemini_client is None or not matched_conditions:
-        return None
-
-    summary = build_structured_summary(user_text, matched_conditions, overall_risk)
-
-    prompt = f"""
-You are a helpful health information assistant for people in rural India.
-You are NOT a doctor and must NOT give a medical diagnosis or prescribe medicines.
-
-I will give you:
-1) What the user typed
-2) A structured summary with possible common issues, self-care steps, and warning signs.
-
-Your job:
-- Explain this in very simple Indian English.
-- Keep it short and calm.
-- Mention only general self-care like rest, hydration, light food, cleanliness, etc.
-- Do NOT guess disease names beyond very common words like 'fever', 'cold', 'loose motion'.
-- Do NOT invent new medicines. You may mention 'paracetamol' only if it is already in the summary.
-- Always end with: "Please visit a nearby doctor or hospital if you are worried or if symptoms get worse."
-
-Here is the structured summary:
-
-{summary}
+RULES TO STRICTLY FOLLOW:
+1.  **NEVER** provide a medical diagnosis, personalized treatment plan, or specific medical advice.
+2.  **ALWAYS** preface your response with a strong safety disclaimer.
+3.  **DO** encourage the user to consult a qualified healthcare professional (doctor, nurse, or pharmacist) for any symptoms or medical concerns.
+4.  **DO** offer reliable, factual, general health information.
+5.  **LANGUAGE:** Always output your response in the language requested by the user.
 """
 
-    try:
-        response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-        )
-        return response.text
-    except Exception as e:
-        # In case of any API error, fail silently and just not show extra explanation
+MODEL_NAME = 'gemini-2.5-flash'
+APP_TITLE = "🩺 Contextual Health Companion (Text Reader)"
+
+# --- CONFIGURATION CONSTANTS ---
+TRIGGER_KEYWORDS = ["symptom", "constipation", "pain", "fever", "headache", "cold"]
+AGE_RANGES = ["0-12", "13-17", "18-45", "46-65", "65+"]
+GENDER_OPTIONS = ["Male", "Female", "Prefer Not to Say"]
+
+# Language Mapping (For Text Output)
+LANGUAGE_MAP = {
+    'English (Default)': 'English',
+    'Kannada (ಕನ್ನಡ)': 'Kannada',
+    'Hindi (हिन्दी)': 'Hindi',
+    'Telugu (తెలుగు)': 'Telugu'
+}
+# -----------------------------
+
+# --- STATE MANAGEMENT ---
+if 'asking_for_details' not in st.session_state:
+    st.session_state.asking_for_details = False 
+
+if 'user_details' not in st.session_state:
+    st.session_state.user_details = {} 
+
+if 'current_language' not in st.session_state:
+    st.session_state.current_language = 'English' 
+
+if 'show_prescription_form' not in st.session_state:
+    st.session_state.show_prescription_form = False
+# -----------------------------
+
+# --- 2. INITIALIZATION FUNCTIONS ---
+
+def get_gemini_client():
+    """Initializes, stores, and returns the persistent Gemini Client."""
+    if 'gemini_client' in st.session_state:
+        return st.session_state['gemini_client']
+
+    if "GEMINI_API_KEY" not in st.secrets:
+        st.error("❌ API Key not found. Please set your GEMINI_API_KEY in `.streamlit/secrets.toml`.")
         return None
-# -------------------------
-# Streamlit UI
-# -------------------------
-st.title("🩺 RuralCare AI")
-st.write(
-    "A simple health guidance helper for basic symptoms.\n\n"
-    "<span style='color:red; font-weight:bold;'>Important:</span> "
-    "<b>This is not a doctor. In an emergency, go to the nearest hospital immediately.</b>",
-    unsafe_allow_html=True,
-)
-st.set_page_config(page_title="RuralCare AI", page_icon="🩺", layout="centered")
+        
+    try:
+        client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+        st.session_state['gemini_client'] = client 
+        return client
+    except Exception as e:
+        st.error(f"❌ Error initializing Gemini Client: {e}")
+        return None
 
-st.title("RuralCare AI 🩺")
-st.write(
-    "A simple health guidance helper for basic symptoms.\n\n"
-    "**⚠️ Important:** This is *not* a doctor. "
-    "In case of emergency, go to the nearest hospital immediately."
-)
+def reset_chat():
+    """Resets the chat session state."""
+    client = get_gemini_client() 
+    if not client:
+        return
 
-st.markdown("---")
+    config = types.GenerateContentConfig(
+        system_instruction=SYSTEM_INSTRUCTION
+    )
+    
+    st.session_state['gemini_chat'] = client.chats.create(model=MODEL_NAME, config=config)
+    
+    st.session_state.messages = [{"role": "assistant", "content": 
+        "**Welcome!** I am your Healthcare Companion. I can provide health information in English, Kannada, Hindi, or Telugu."}]
+    st.session_state.asking_for_details = False 
+    st.session_state.user_details = {} 
+    st.session_state.show_prescription_form = False
+    
+    st.rerun() 
 
-st.subheader("Describe your problem")
+# --- HELPER FUNCTION FOR AI RESPONSE (TEXT ONLY) ---
 
-st.write("Example: `I have fever and loose motion from yesterday`")
-
-user_input = st.text_area("Type your symptoms in simple words:", height=150)
-
-if st.button("Get Guidance"):
-    if not user_input.strip():
-        st.warning("Please type your symptoms first.")
+def handle_final_response(base_prompt, is_medicine_request=False):
+    """
+    Handles the API call and streams the text response.
+    Appends language instruction to the prompt.
+    """
+    target_lang = st.session_state.current_language
+    
+    # Construct the final prompt with language instruction
+    if is_medicine_request:
+        final_prompt = f"{base_prompt}\n\nPlease provide this information in **{target_lang}** language."
     else:
-        matched_conditions, overall_risk = analyze_symptoms(user_input)
+        final_prompt = f"{base_prompt}\n\n(Respond in {target_lang} language)"
 
-        if not matched_conditions:
-            st.error(
-                "Sorry, I could not clearly understand the problem from your words.\n\n"
-                "Try using simple words like **fever, loose motion, cough, cold, headache, stomach pain**."
-            )
+    # Append user prompt to history
+    # For medicine requests, we display a clear label
+    display_content = base_prompt if not is_medicine_request else f"Requesting info for medicine: {base_prompt}"
+    st.session_state.messages.append({"role": "user", "content": display_content})
+    
+    full_response = ""
+    
+    with st.chat_message("assistant"):
+        message_placeholder = st.empty()
+        
+        if 'gemini_chat' in st.session_state:
+            try:
+                response_stream = st.session_state['gemini_chat'].send_message_stream(final_prompt) 
+                
+                for chunk in response_stream:
+                    full_response += chunk.text
+                    message_placeholder.markdown(full_response + "▌") 
+
+                message_placeholder.markdown(full_response)
+                
+            except Exception as e:
+                full_response = f"An error occurred: {e}"
+                message_placeholder.markdown(full_response)
         else:
-            # Color based on risk
-            if overall_risk in ["Low", "Low to Medium"]:
-                st.success(f"Overall concern level: **{overall_risk}**")
-            elif overall_risk == "Medium":
-                st.warning(f"Overall concern level: **{overall_risk}**")
-            else:
-                st.error(f"Overall concern level: **{overall_risk}**")
+            full_response = "Error: Chat not initialized."
+            message_placeholder.markdown(full_response)
 
-            for cond in matched_conditions:
-                st.markdown(f"### Possible Issue: {cond['issue']}")
-                st.write(f"**Risk level:** {cond['risk']}")
+    # Log assistant response to history
+    st.session_state.messages.append({
+        "role": "assistant", 
+        "content": full_response
+    })
 
-                st.write("**Self-care advice:**")
-                for a in cond["advice"]:
-                    st.write(f"- {a}")
+# --- HELPER FOR CONTEXT FORM SUBMISSION ---
 
-                st.write("**You should see a doctor / hospital if:**")
-                for w in cond["doctor_when"]:
-                    st.write(f"- {w}")
+def handle_context_form_submit(user_gender, user_age, user_weight):
+    st.session_state.user_details['gender'] = user_gender
+    st.session_state.user_details['age'] = user_age
+    st.session_state.user_details['weight'] = user_weight
+    st.session_state.asking_for_details = False 
 
-                st.markdown("---")
+    # Find the original symptom
+    original_symptom = next(
+        (msg['content'] for msg in reversed(st.session_state.messages) 
+         if msg['role'] == 'user' and not msg['content'].startswith('Requesting info')),
+        "General health inquiry."
+    )
+    
+    prompt = (
+        f"Original request: {original_symptom}\n"
+        f"User Details - Gender: {user_gender}, Age: {user_age}, Weight: {user_weight}\n"
+        "Provide general, educational health information based on this context."
+    )
 
-            # 🔹 Extra AI explanation from Gemini
-            ai_text = gemini_explanation(user_input, matched_conditions, overall_risk)
-            if ai_text:
-                st.markdown("### 🤖 AI Explanation (Gemini)")
-                st.write(ai_text)
+    handle_final_response(prompt)
+    st.rerun()
 
-            st.info(
-                "This is only general information, not a medical diagnosis.\n"
-                "Always consult a qualified doctor for proper treatment."
+# --- 3. STREAMLIT APP UI ---
+
+st.set_page_config(page_title=APP_TITLE, page_icon="🩺", layout="wide")
+st.title(APP_TITLE)
+
+if 'gemini_chat' not in st.session_state:
+    reset_chat()
+    st.rerun() 
+
+# --- SIDEBAR CONTROLS ---
+
+with st.sidebar:
+    st.header("⚙️ Settings")
+    
+    # 1. LANGUAGE SELECTOR (For Reading)
+    st.subheader("Select Reading Language")
+    selected_lang_key = st.selectbox(
+        "Choose the language for the answer:",
+        options=list(LANGUAGE_MAP.keys()),
+        index=0
+    )
+    # Update state immediately
+    st.session_state.current_language = LANGUAGE_MAP[selected_lang_key]
+    
+    st.markdown("---")
+    
+    # 2. MEDICINE INFO BUTTON
+    if st.button("💊 Get Medicine Info"):
+        st.session_state.show_prescription_form = not st.session_state.show_prescription_form
+
+    st.markdown("---")
+    
+    st.button("Clear Chat History", on_click=reset_chat, type="primary")
+    
+    if st.session_state.user_details:
+        st.markdown("---")
+        st.caption("Context:")
+        for k, v in st.session_state.user_details.items():
+            st.caption(f"{k}: {v}")
+
+
+# --- MAIN CHAT AREA ---
+
+# Safety Disclaimer
+with st.container(border=True):
+    st.markdown("""
+    <div style="padding: 5px;">
+    <h4 style="color: #FF4B4B; margin-top: 0;">⚠️ SAFETY FIRST</h4>
+    <p>I provide general information only. <b>I am not a doctor.</b> Always consult a professional.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Display Chat History
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# --- INTERACTIVE FORMS ---
+
+# 1. MEDICINE INFORMATION FORM
+if st.session_state.show_prescription_form:
+    with st.form("medicine_info_form"):
+        st.subheader(f"💊 Medicine Information ({st.session_state.current_language})")
+        st.info("Enter the medicine name below to understand its usage and associated symptoms.")
+        
+        medicine_name = st.text_input("Enter Medicine Name (e.g., Dolo 650):")
+        
+        med_submitted = st.form_submit_button("Get Information")
+
+        if med_submitted and medicine_name:
+            # Construct a specific prompt for medicine info
+            med_prompt = (
+                f"Please explain the general usage, purpose, and common symptoms treated by the medicine: '{medicine_name}'. "
+                f"Provide a clear note on when it is typically used."
             )
+            # Pass is_medicine_request=True to format it correctly
+            handle_final_response(med_prompt, is_medicine_request=True)
+            st.session_state.show_prescription_form = False
+            st.rerun()
 
-st.markdown("---")
-st.caption("Prototype for educational and hackathon use only.")
+# 2. CONTEXT DETAILS FORM
+if st.session_state.asking_for_details:
+    with st.form("context_form"):
+        st.info("Please provide details for better accuracy:")
+        gender = st.radio("Gender", GENDER_OPTIONS, horizontal=True)
+        age = st.selectbox("Age Range", AGE_RANGES)
+        weight = st.number_input("Weight (kg)", 1, 300, 70)
+        
+        if st.form_submit_button("Submit"):
+            handle_context_form_submit(gender, age, weight)
+
+# --- MAIN INPUT (Voice & Text) ---
+
+# Only show inputs if forms are closed
+if not st.session_state.asking_for_details and not st.session_state.show_prescription_form:
+    st.markdown("---")
+    col1, col2 = st.columns([1, 4])
+    
+    with col1:
+        voice_text = speech_to_text(
+            language='en', 
+            start_prompt="🎤 Speak", 
+            stop_prompt="🛑 Stop",
+            just_once=True,
+            key='voice_input'
+        )
+    
+    with col2:
+        text_input = st.chat_input("Ask about symptoms...")
+
+    user_input = voice_text or text_input
+
+    if user_input:
+        # Check for trigger keywords (Symptom flow)
+        if any(k in user_input.lower() for k in TRIGGER_KEYWORDS):
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            st.session_state.asking_for_details = True
+            with st.chat_message("assistant"):
+                msg = "**Context Required:** Please fill the form above."
+                st.session_state.messages.append({"role": "assistant", "content": msg})
+                st.markdown(msg)
+            st.rerun()
+        else:
+            # Standard Question flow
+            handle_final_response(user_input)
+            st.rerun()
