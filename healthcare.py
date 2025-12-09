@@ -22,7 +22,7 @@ APP_TITLE = "🩺 Health Companion (Dr.Drug Lord)"
 
 # --- CONFIGURATION CONSTANTS ---
 TRIGGER_KEYWORDS = ["symptom", "constipation", "pain", "fever", "headache", "cold"]
-AGE_RANGES = ["0-12", "13-17", "18-30", "31-45, "46-65", "65+"]
+AGE_RANGES = ["0-12", "13-17", "18-45", "46-65", "65+"]
 GENDER_OPTIONS = ["Male", "Female", "others"]
 
 # Language Mapping (For Text Output)
@@ -285,4 +285,5 @@ if not st.session_state.asking_for_details and not st.session_state.show_prescri
             # Standard Question flow
             handle_final_response(user_input)
             st.rerun()
+
 
